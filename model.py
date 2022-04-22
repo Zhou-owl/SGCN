@@ -179,29 +179,32 @@ class SparseWeightedAdjacency(nn.Module):
     def forward(self, graph, identity):
 
         assert len(graph.shape) == 3
-
+        # 把特征图分成了空间图和时间图两个，空间图只有xy特征，时间图带上序列号
         spatial_graph = graph[:, :, 1:]  # (T N 2)
         temporal_graph = graph.permute(1, 0, 2)  # (N T 3)
 
         # (T num_heads N N)   (T N d_model)
+        # 得到空间图的邻接矩阵（kq），并把特征图做embedding(用的linear，作用应该和conv1*1差不多)
         dense_spatial_interaction, spatial_embeddings = self.spatial_attention(spatial_graph, multi_head=True)
 
         # (N num_heads T T)   (N T d_model)
         dense_temporal_interaction, temporal_embeddings = self.temporal_attention(temporal_graph, multi_head=True)
 
         # attention fusion
+        # 把注意力邻接矩阵在序列上做1*1卷积，融合时间信息，维度不变
         st_interaction = self.spa_fusion(dense_spatial_interaction.permute(1, 0, 2, 3)).permute(1, 0, 2, 3)
         ts_interaction = dense_temporal_interaction
-
+        # 根据邻接矩阵生成抑制mask
         spatial_mask, temporal_mask = self.interaction_mask(st_interaction, ts_interaction)
 
         # self-connected
+        # identity提供节点和自身的交互（I）
         spatial_mask = spatial_mask + identity[0].unsqueeze(1)
         temporal_mask = temporal_mask + identity[1].unsqueeze(1)
 
+        # 抑0归一化
         normalized_spatial_adjacency_matrix = self.zero_softmax(dense_spatial_interaction * spatial_mask, dim=-1)
         normalized_temporal_adjacency_matrix = self.zero_softmax(dense_temporal_interaction * temporal_mask, dim=-1)
-
         return normalized_spatial_adjacency_matrix, normalized_temporal_adjacency_matrix,\
                spatial_embeddings, temporal_embeddings
 
@@ -217,7 +220,7 @@ class GraphConvolution(nn.Module):
         self.dropout = dropout
 
     def forward(self, graph, adjacency):
-
+        # 特征图和邻接矩阵相乘
         # graph [batch_size 1 seq_len 2]
         # adjacency [batch_size num_heads seq_len seq_len]
         gcn_features = self.embedding(torch.matmul(adjacency, graph))
@@ -246,20 +249,22 @@ class SparseGraphConvolution(nn.Module):
 
         # graph [1 seq_len num_pedestrians  3]
         # _matrix [batch num_heads seq_len seq_len]
-
+        # 这里是空间图，只看x,y坐标
         graph = graph[:, :, :, 1:]
         spa_graph = graph.permute(1, 0, 2, 3)  # (seq_len 1 num_p 2)
         tem_graph = spa_graph.permute(2, 1, 0, 3)  # (num_p 1 seq_len 2)
-
+        # gtcn是特征图和空间邻接矩阵相乘
         gcn_spatial_features = self.spatial_temporal_sparse_gcn[0](spa_graph, normalized_spatial_adjacency_matrix)
         gcn_spatial_features = gcn_spatial_features.permute(2, 1, 0, 3)
-
+        # 乘完之后再和时间特征矩阵相乘
         # [num_p num_heads seq_len d]
         gcn_spatial_temporal_features = self.spatial_temporal_sparse_gcn[1](gcn_spatial_features, normalized_temporal_adjacency_matrix)
 
+        # tgcn是特征图和时间邻接矩阵相乘
         gcn_temporal_features = self.temporal_spatial_sparse_gcn[0](tem_graph,
                                                                    normalized_temporal_adjacency_matrix)
         gcn_temporal_features = gcn_temporal_features.permute(2, 1, 0, 3)
+        # 乘完之后再和空间的相乘
         gcn_temporal_spatial_features = self.temporal_spatial_sparse_gcn[1](gcn_temporal_features,
                                                                             normalized_spatial_adjacency_matrix)
 
@@ -307,23 +312,24 @@ class TrajectoryModel(nn.Module):
     def forward(self, graph, identity):
 
         # graph 1 obs_len N 3
-
+        # 得到时空邻接矩阵（已归一化，具体值待训练），embedding图后面没用
         normalized_spatial_adjacency_matrix, normalized_temporal_adjacency_matrix, spatial_embeddings, temporal_embeddings = \
             self.sparse_weighted_adjacency_matrices(graph.squeeze(), identity)
-
+        # 得到时空加权特征图和空时加权图
         gcn_temporal_spatial_features, gcn_spatial_temporal_features = self.stsgcn(
             graph, normalized_spatial_adjacency_matrix, normalized_temporal_adjacency_matrix
         )
 
+        # 把两种特征图加起来了，不知道fusion有什么用
         gcn_representation = self.fusion_(gcn_temporal_spatial_features) + gcn_spatial_temporal_features
 
         gcn_representation = gcn_representation.permute(0, 2, 1, 3)
-
+        # 这里tcn等价于stgcnn里的时间外推网络
         features = self.tcns[0](gcn_representation)
-
+        # 叠几层，加个dropout
         for k in range(1, self.n_tcn):
             features = F.dropout(self.tcns[k](features) + features, p=self.dropout)
-
+        # 变换到输出特征维度，把某个维度上的数做均值
         prediction = torch.mean(self.output(features), dim=-2)
 
         return prediction.permute(1, 0, 2).contiguous()

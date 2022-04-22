@@ -61,9 +61,11 @@ def train(epoch, model, optimizer, checkpoint_dir, loader_train):
     loss_batch = 0
     batch_count = 0
     is_fst_loss = True
+    # the number of seq
     loader_len = len(loader_train)
+    #
     turn_point = int(loader_len / args.batch_size) * args.batch_size + loader_len % args.batch_size - 1
-
+    # seq_num * util.out
     for cnt, batch in enumerate(loader_train):
         batch_count += 1
 

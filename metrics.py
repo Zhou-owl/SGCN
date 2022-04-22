@@ -86,10 +86,12 @@ def bivariate_loss(V_pred,V_trgt):
 
     # Final PDF calculation
     result = result / denom
+    print('result1:', result) #!!!have some error
     # Numerical stability
     epsilon = 1e-20
     result = -torch.log(torch.clamp(result, min=epsilon))
+    print('result2:',result) #have some error, elements in metrix > 1
     result = torch.mean(result)
-    
+    print('result3:',result)
     return result
    

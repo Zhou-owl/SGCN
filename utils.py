@@ -229,7 +229,7 @@ class TrajectoryDataset(Dataset):
 
             start, end = self.seq_start_end[ss]
             # obs_traj: (all_valid_peds_num, 2, frames(8)), pass valid peds of each seq into <seqtograph>
-            # v: (obj_len, peds_num, feature(3))m feature[0]=frame_id+1, feature[1] and future[2] = rel_pos
+            # v: (obs_len, peds_num, feature(3))m feature[0]=frame_id+1, feature[1] and future[2] = rel_pos
             v_= seq_to_graph(self.obs_traj[start:end, :], self.obs_traj_rel[start:end, :], True)
             self.v_obs.append(v_.clone())
             v_= seq_to_graph(self.pred_traj[start:end, :], self.pred_traj_rel[start:end, :], False)
